@@ -18,7 +18,12 @@ export default function TrainersPage({ user }) {
   const loadTrainers = async () => {
     try {
       const data = await getTrainers();
-      setTrainers(data);
+      const sanitized = data.map(t => ({
+        ...t,
+        kinhnghiem: Number(t.kinhnghiem) || 0,
+        luong: Number(t.luong) || 0,
+      }));
+      setTrainers(sanitized);
     } finally { setLoading(false); }
   };
 
@@ -28,15 +33,28 @@ export default function TrainersPage({ user }) {
   );
 
   const openAdd = () => setForm({ hoten: '', email: '', sdt: '', chuyenmon: '', kinhnghiem: 1, trangthai: 'đang làm', luong: 10000000 }) & setModal('add');
-  const openEdit = (t) => setForm({ ...t }) & setModal('edit');
+  const openEdit = (t) => setForm({ ...t, kinhnghiem: Number(t.kinhnghiem) || 0, luong: Number(t.luong) || 0 }) & setModal('edit');
   const save = async () => {
     try {
+      const payload = {
+        ...form,
+        kinhnghiem: Number(form.kinhnghiem) || 0,
+        luong: Number(form.luong) || 0,
+      };
       if (modal === 'add') {
-        const newTrainer = await createTrainer(form);
-        setTrainers([...trainers, newTrainer]);
+        const newTrainer = await createTrainer(payload);
+        setTrainers([...trainers, {
+          ...newTrainer,
+          kinhnghiem: Number(newTrainer.kinhnghiem) || 0,
+          luong: Number(newTrainer.luong) || 0,
+        }]);
       } else {
-        const updated = await updateTrainer(form.id, form);
-        setTrainers(trainers.map(t => t.id === updated.id ? updated : t));
+        const updated = await updateTrainer(form.id, payload);
+        setTrainers(trainers.map(t => t.id === updated.id ? {
+          ...updated,
+          kinhnghiem: Number(updated.kinhnghiem) || 0,
+          luong: Number(updated.luong) || 0,
+        } : t));
       }
       setModal(null);
     } catch (error) { alert('Lỗi: ' + error.message); }
@@ -92,7 +110,16 @@ export default function TrainersPage({ user }) {
           <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 0% 0%, rgba(168, 85, 247, 0.1), transparent 80%)', opacity: 0.5, pointerEvents: 'none' }} />
           <div style={{ position: 'relative', zIndex: 1 }}>
             <p style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>Kinh Nghiệm TB</p>
-            <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{trainers.length > 0 ? Math.round(trainers.reduce((sum, t) => sum + t.kinhnghiem, 0) / trainers.length) : 0} năm</p>
+            <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>
+              {(() => {
+                const validExperiences = trainers
+                  .map(t => Number(t.kinhnghiem))
+                  .filter(n => !Number.isNaN(n) && n >= 0 && n <= 60);
+                return validExperiences.length > 0
+                  ? Math.round(validExperiences.reduce((sum, n) => sum + n, 0) / validExperiences.length)
+                  : 0;
+              })()} năm
+            </p>
             <p style={{ fontSize: 12, color: '#9ca3af' }}>So với tuần trước: <span style={{ color: '#a855f7', fontWeight: 700 }}>↑ 2%</span></p>
           </div>
         </div>
@@ -202,8 +229,8 @@ export default function TrainersPage({ user }) {
             </div>
             <div style={{ marginBottom: 16 }}><label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6 }}>Chuyên môn</label><input className="input-field" value={form.chuyenmon} onChange={e => setForm({...form, chuyenmon: e.target.value})} /></div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-              <div><label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6 }}>Kinh nghiệm (năm)</label><input className="input-field" type="number" value={form.kinhnghiem} onChange={e => setForm({...form, kinhnghiem: e.target.value})} /></div>
-              <div><label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6 }}>Lương (VNĐ)</label><input className="input-field" type="number" value={form.luong} onChange={e => setForm({...form, luong: e.target.value})} /></div>
+              <div><label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6 }}>Kinh nghiệm (năm)</label><input className="input-field" type="number" value={form.kinhnghiem} onChange={e => setForm({...form, kinhnghiem: Number(e.target.value) || 0})} /></div>
+              <div><label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6 }}>Lương (VNĐ)</label><input className="input-field" type="number" value={form.luong} onChange={e => setForm({...form, luong: Number(e.target.value) || 0})} /></div>
             </div>
             <div style={{ marginBottom: 16 }}>
               <label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6 }}>Trạng thái</label>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, Calendar, Users as UsersIcon, Clock, CheckCircle, AlertCircle } from 'lucide-react';
-import { getSchedules, createSchedule, updateSchedule, deleteSchedule, getTrainers, registerSchedule, getMember, getPackages, getSessionsRemaining, enrollMemberInClass, isMemberEnrolledInClass, getClassEnrollments } from '../services/api';
+import { getSchedules, createSchedule, updateSchedule, deleteSchedule, getTrainers, registerSchedule, getMember, getPackages, getPayments, getSessionsRemaining, enrollMemberInClass, isMemberEnrolledInClass, getClassEnrollments } from '../services/api';
 import Modal from '../components/Modal';
 import Avatar from '../components/Avatar';
 import StatusBadge from '../components/StatusBadge';
@@ -11,6 +11,7 @@ export default function SchedulesPage({ user }) {
   const [trainers, setTrainers] = useState([]);
   const [packages, setPackages] = useState([]);
   const [memberPackage, setMemberPackage] = useState(null);
+  const [paidPackageIds, setPaidPackageIds] = useState([]);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
@@ -47,8 +48,20 @@ export default function SchedulesPage({ user }) {
           // Ensure memberPackage is always an array, never null/undefined/non-array
           const packages = Array.isArray(member.magoi) ? member.magoi : [];
           setMemberPackage(packages);
+
+          // Load payment status for this member
+          try {
+            const payments = await getPayments();
+            const paidIds = payments
+              .filter(p => parseInt(p.hocvien_id) === parseInt(user.memberId) && p.trangthai === 'đã thanh toán')
+              .map(p => parseInt(p.goi_id));
+            setPaidPackageIds(Array.from(new Set(paidIds)));
+          } catch (error) {
+            console.error('Error loading payment status for member:', error);
+            setPaidPackageIds([]);
+          }
           
-          // Load sessions remaining for each package
+          // Load sessions remaining for each paid package
           const sessionsData = {};
           for (const pkgId of packages) {
             try {
@@ -74,20 +87,23 @@ export default function SchedulesPage({ user }) {
           setEnrolledClasses(enrolled);
         } else {
           setMemberPackage([]);
+          setPaidPackageIds([]);
         }
       } else {
         setMemberPackage([]);
+        setPaidPackageIds([]);
       }
       setLoading(false);
     };
     fetch();
   }, [user]);
 
-  // Filter schedules: members see only their package's schedules
+  // Filter schedules: members see only schedules belonging to packages they have paid for
   let mySchedules = schedules;
   const validMemberPackage = Array.isArray(memberPackage) ? memberPackage : [];
-  if (user.role === 'member' && validMemberPackage.length > 0) {
-    mySchedules = schedules.filter(s => validMemberPackage.includes(s.goi_id));
+  const validPaidPackageIds = Array.isArray(paidPackageIds) ? paidPackageIds : [];
+  if (user.role === 'member') {
+    mySchedules = schedules.filter(s => validPaidPackageIds.includes(parseInt(s.goi_id)));
   }
   
   const filtered = mySchedules.filter(s => String(s.tenbomon || '').toLowerCase().includes(String(search || '').toLowerCase()));
@@ -117,8 +133,8 @@ export default function SchedulesPage({ user }) {
 
     // Find which package this schedule belongs to
     const packageId = parseInt(schedule.goi_id);
-    if (!memberPackage.includes(packageId)) {
-      alert('Bạn không có gói tập này');
+    if (!validPaidPackageIds.includes(packageId)) {
+      alert('Bạn chưa thanh toán gói này hoặc gói đang chờ xác nhận');
       return;
     }
 
@@ -229,10 +245,13 @@ export default function SchedulesPage({ user }) {
         <div>
           <h1 className="gym-heading" style={{ fontSize: 32, fontWeight: 800, color: '#f0f0f0', letterSpacing: '-0.5px' }}>Lịch Học</h1>
           <p style={{ color: '#9ca3af', fontSize: 14, marginTop: 6, fontWeight: 400 }}>
-            {user.role === 'member' && memberPackage && Array.isArray(memberPackage) ? (
+            {user.role === 'member' ? (
               <>
-                Gói: <span style={{ color: '#4fc3f7', fontWeight: 700 }}>
-                  {memberPackage.map(pkgId => packages.find(p => p.id === pkgId)?.ten).filter(Boolean).join(', ')}
+                Gói đã thanh toán: <span style={{ color: '#4fc3f7', fontWeight: 700 }}>
+                  {packages
+                    .filter(p => validPaidPackageIds.includes(p.id))
+                    .map(p => p.ten)
+                    .join(', ') || 'Chưa có gói thanh toán'}
                 </span> • {mySchedules.length} lịch học khả dụng
               </>
             ) : (
@@ -246,6 +265,11 @@ export default function SchedulesPage({ user }) {
           </button>
         )}
       </div>
+      {user.role === 'member' && validMemberPackage.length > 0 && validPaidPackageIds.length === 0 && (
+        <div style={{ marginBottom: 24, padding: 18, borderRadius: 16, background: 'rgba(255, 193, 7, 0.1)', border: '1px solid rgba(255, 193, 7, 0.2)', color: '#f9a825' }}>
+          <strong>Lưu ý:</strong> Lịch học của gói mới sẽ chỉ hiển thị sau khi thanh toán được xác nhận. Hiện tại bạn có gói đang chờ duyệt hoặc chưa thanh toán.
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 32 }}>
