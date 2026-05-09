@@ -18,9 +18,10 @@ import AccountsPage from './pages/AccountsPage';
 import SelectPackagePage from './pages/SelectPackagePage';
 import MainLayout from './components/MainLayout';
 import { getCurrentUser, logout, getMember } from './services/api';
+import { useAuth } from './context/AuthContext';
 
 function App() {
-  const [user, setUser] = useState(null);
+  const { user: authUser, login, logout: authLogout } = useAuth();
   const [loading, setLoading] = useState(true);
   const [showRegister, setShowRegister] = useState(false);
   const [memberPackages, setMemberPackages] = useState(null);
@@ -28,7 +29,7 @@ function App() {
   useEffect(() => {
     const stored = getCurrentUser();
     if (stored) {
-      setUser(stored);
+      login(stored);
       // If member, load their package data
       if (stored.role === 'member' && stored.memberId) {
         loadMemberPackages(stored.memberId);
@@ -48,7 +49,7 @@ function App() {
 
   const handleLogin = (loggedInUser) => {
     console.log('App: handleLogin called with', loggedInUser);
-    setUser(loggedInUser);
+    login(loggedInUser);
     // Load member packages if login as member
     if (loggedInUser.role === 'member' && loggedInUser.memberId) {
       loadMemberPackages(loggedInUser.memberId);
@@ -56,8 +57,7 @@ function App() {
   };
 
   const handleLogout = () => {
-    logout();
-    setUser(null);
+    authLogout();
     setMemberPackages(null);
   };
 
@@ -65,7 +65,7 @@ function App() {
     return <div style={{ color: '#fff', background: '#0a0e27', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
   }
 
-  if (!user) {
+  if (!authUser) {
     return (
       <>
         <FontLoader />
@@ -79,14 +79,14 @@ function App() {
   }
 
   // If member just logged in with no packages selected, redirect to select package
-  if (user.role === 'member' && memberPackages !== null && memberPackages.length === 0) {
+  if (authUser.role === 'member' && memberPackages !== null && memberPackages.length === 0) {
     return (
       <>
         <FontLoader />
-        <SelectPackagePage user={user} onComplete={() => {
+        <SelectPackagePage user={authUser} onComplete={() => {
           // Reload member packages
-          if (user.memberId) {
-            loadMemberPackages(user.memberId);
+          if (authUser.memberId) {
+            loadMemberPackages(authUser.memberId);
           }
         }} />
       </>
@@ -97,26 +97,26 @@ function App() {
     <>
       <FontLoader />
       <BrowserRouter>
-        <MainLayout user={user} onLogout={handleLogout}>
+        <MainLayout user={authUser} onLogout={handleLogout}>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/select-package" element={<SelectPackagePage user={user} onComplete={() => {
+            <Route path="/select-package" element={<SelectPackagePage user={authUser} onComplete={() => {
               const updated = getCurrentUser();
               if (updated) {
-                setUser(updated);
+                login(updated);
               }
             }} />} />
-            <Route path="/dashboard" element={<Dashboard user={user} />} />
-            <Route path="/members" element={<MembersPage user={user} />} />
-            <Route path="/trainers" element={<TrainersPage user={user} />} />
-            <Route path="/schedules" element={<SchedulesPage user={user} />} />
-            <Route path="/approval" element={user.role === 'admin' ? <ApprovalPage user={user} /> : <Navigate to="/dashboard" replace />} />
-            <Route path="/payment-approval" element={(user.role === 'admin' || user.role === 'manager') ? <PaymentApprovalPage user={user} /> : <Navigate to="/dashboard" replace />} />
-            <Route path="/accounts" element={(user.role === 'admin' || user.role === 'manager') ? <AccountsPage user={user} /> : <Navigate to="/dashboard" replace />} />
-            <Route path="/payments" element={<PaymentsPage user={user} />} />
-            <Route path="/member-payments" element={<MemberPaymentPage user={user} />} />
-            <Route path="/attendance" element={<AttendancePage user={user} />} />
-            <Route path="/change-password" element={<ChangePasswordPage user={user} />} />
+            <Route path="/dashboard" element={<Dashboard user={authUser} />} />
+            <Route path="/members" element={<MembersPage user={authUser} />} />
+            <Route path="/trainers" element={<TrainersPage user={authUser} />} />
+            <Route path="/schedules" element={<SchedulesPage user={authUser} />} />
+            <Route path="/approval" element={authUser.role === 'admin' ? <ApprovalPage user={authUser} /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/payment-approval" element={(authUser.role === 'admin' || authUser.role === 'manager') ? <PaymentApprovalPage user={authUser} /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/accounts" element={(authUser.role === 'admin' || authUser.role === 'manager') ? <AccountsPage user={authUser} /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/payments" element={<PaymentsPage user={authUser} />} />
+            <Route path="/member-payments" element={<MemberPaymentPage user={authUser} />} />
+            <Route path="/attendance" element={<AttendancePage user={authUser} />} />
+            <Route path="/change-password" element={<ChangePasswordPage user={authUser} />} />
           </Routes>
         </MainLayout>
       </BrowserRouter>

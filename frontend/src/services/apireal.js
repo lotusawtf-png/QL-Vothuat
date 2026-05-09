@@ -1,9 +1,9 @@
 // src/services/api.js - MOCK VERSION WITH LOCALSTORAGE PERSISTENCE
 
-const delay = (ms = 300) => new Promise(resolve => setTimeout(resolve, ms));
+const API_URL = 'http://localhost:8080';
 export const getMembers = async () => {
-  await delay();
-  return getStoredMembers();
+  const response = await axios.get(`${API_URL}/api/members`);
+  return response.data;
 };
 
 // Default mock data - used only if localStorage is empty
@@ -664,6 +664,12 @@ export const getCurrentUser = () => {
 };
 
 // Members
+export const getMembers = async () => { 
+  await delay(); 
+  mockMembers = getStoredMembers();
+  return [...mockMembers]; 
+};
+
 export const getMember = async (id) => { 
   await delay(); 
   mockMembers = getStoredMembers();
@@ -1035,19 +1041,6 @@ export const rejectScheduleRequest = async (scheduleId, trainerId, lyDo = '') =>
   
   schedule.danh_sach_hlv_dang_ky[hIndex].trang_thai = 'từ chối';
   schedule.danh_sach_hlv_dang_ky[hIndex].ly_do = lyDo;
-  saveSchedulesToStorage();
-  return schedule;
-};
-
-export const cancelScheduleRegistration = async (scheduleId, trainerId) => {
-  await delay();
-  const schedule = mockSchedules.find(s => s.id === parseInt(scheduleId));
-  if (!schedule) throw new Error('Lịch không tìm thấy');
-  
-  const hIndex = schedule.danh_sach_hlv_dang_ky.findIndex(h => h.hlv_id === parseInt(trainerId));
-  if (hIndex === -1) throw new Error('Đơn đăng ký không tìm thấy');
-  
-  schedule.danh_sach_hlv_dang_ky.splice(hIndex, 1);
   saveSchedulesToStorage();
   return schedule;
 };

@@ -35,7 +35,21 @@ export default function PaymentsPage({ user }) {
       setMembers(m);
       setLoading(false);
     };
+    
     fetch();
+    
+    // Auto-refresh payments every 15 seconds
+    const refreshInterval = setInterval(fetch, 15000);
+    
+    // Listen for member updates
+    const handleMembersUpdated = fetch;
+    window.addEventListener('membersUpdated', handleMembersUpdated);
+    
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('membersUpdated', handleMembersUpdated);
+    };
   }, []);
 
   const myPayments = user.role === 'member' ? payments.filter(p => p.hocvien_id === user.memberId) : payments;

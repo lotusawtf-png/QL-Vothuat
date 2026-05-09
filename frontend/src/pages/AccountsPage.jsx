@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Lock, CheckCircle2, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { getAccounts, createAccount, updateAccount, updateAccountPassword, deleteAccount, getMembers, getTrainers } from '../services/api';
 import Avatar from '../components/Avatar';
+import { useAuth } from '../context/AuthContext';
 
 const ROLE_OPTIONS = [
   { value: 'admin', label: 'Quản Trị Viên' },
@@ -16,6 +17,7 @@ const STATUS_OPTIONS = [
 ];
 
 export default function AccountsPage({ user }) {
+  const { user: currentUser, updateUser } = useAuth();
   const [accounts, setAccounts] = useState([]);
   const [members, setMembers] = useState([]);
   const [trainers, setTrainers] = useState([]);
@@ -32,6 +34,21 @@ export default function AccountsPage({ user }) {
 
   useEffect(() => {
     loadData();
+    
+    // Auto-refresh accounts every 10 seconds
+    const refreshInterval = setInterval(loadData, 10000);
+    
+    // Listen for member/trainer updates
+    const handleDataUpdated = () => {
+      loadData();
+    };
+    window.addEventListener('membersUpdated', handleDataUpdated);
+    
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('membersUpdated', handleDataUpdated);
+    };
   }, []);
 
   const loadData = async () => {
@@ -82,14 +99,58 @@ export default function AccountsPage({ user }) {
 
   const openEditModal = (account) => {
     setSelectedAccount(account);
-    setForm({
+    
+    // Initialize form with proper structure based on role
+    const baseForm = {
       username: account.username,
       name: account.name,
       role: account.role,
       status: account.status,
       memberId: account.memberId || null,
-      trainerId: account.trainerId || null
-    });
+      trainerId: account.trainerId || null,
+      newMemberMode: false,
+      newTrainerMode: false,
+      memberData: {
+        hoten: '',
+        email: '',
+        sdt: ''
+      },
+      trainerData: {
+        hoten: '',
+        email: '',
+        sdt: '',
+        chuyenmon: '',
+        kinhnghiem: 0
+      }
+    };
+
+    // For member accounts, load current member data if available
+    if (account.role === 'member' && account.memberId && members && members.length > 0) {
+      const member = members.find(m => m.id === account.memberId);
+      if (member) {
+        baseForm.memberData = {
+          hoten: member.hoten || '',
+          email: member.email || '',
+          sdt: member.sdt || ''
+        };
+      }
+    }
+
+    // For trainer accounts, load current trainer data if available
+    if (account.role === 'trainer' && account.trainerId && trainers && trainers.length > 0) {
+      const trainer = trainers.find(t => t.id === account.trainerId);
+      if (trainer) {
+        baseForm.trainerData = {
+          hoten: trainer.hoten || '',
+          email: trainer.email || '',
+          sdt: trainer.sdt || '',
+          chuyenmon: trainer.chuyenmon || '',
+          kinhnghiem: trainer.kinhnghiem || 0
+        };
+      }
+    }
+
+    setForm(baseForm);
     setModal(true);
   };
 
@@ -177,7 +238,39 @@ export default function AccountsPage({ user }) {
 
     try {
       if (selectedAccount) {
-        await updateAccount(selectedAccount.id, form);
+        // When updating, prepare the data to send
+        const dataToUpdate = {
+          username: form.username,
+          name: form.name,
+          role: form.role,
+          status: form.status,
+          memberId: form.memberId || null,
+          trainerId: form.trainerId || null
+        };
+        
+        // Include member/trainer data if applicable
+        if (form.role === 'member' && form.memberId) {
+          dataToUpdate.memberData = form.memberData;
+        }
+        if (form.role === 'trainer' && form.trainerId) {
+          dataToUpdate.trainerData = form.trainerData;
+        }
+        
+        console.log('Updating account with data:', dataToUpdate);
+        const updatedAccount = await updateAccount(selectedAccount.id, dataToUpdate);
+        
+        // If updating current user's account, update AuthContext
+        // Compare by ID to ensure accuracy
+        if ((currentUser && currentUser.id === selectedAccount.id) || (user && user.id === selectedAccount.id)) {
+          console.log('Updating current user info in AuthContext');
+          updateUser({
+            name: form.name,
+            role: form.role,
+            status: form.status,
+            avatar: selectedAccount.avatar
+          });
+        }
+        
         setMessage('✓ Cập nhật tài khoản thành công');
       } else {
         const dataToCreate = {
@@ -191,6 +284,7 @@ export default function AccountsPage({ user }) {
           ...(form.role === 'member' && form.newMemberMode && { memberData: form.memberData }),
           ...(form.role === 'trainer' && form.newTrainerMode && { trainerData: form.trainerData })
         };
+        console.log('Creating account with data:', dataToCreate);
         await createAccount(dataToCreate);
         setMessage('✓ Thêm tài khoản thành công');
       }
@@ -198,7 +292,8 @@ export default function AccountsPage({ user }) {
       setModal(false);
       loadData();
     } catch (error) {
-      setMessage(error.message);
+      console.error('Error in handleSave:', error);
+      setMessage(error?.message || 'Có lỗi xảy ra');
       setMessageType('error');
     }
   };
@@ -533,6 +628,21 @@ export default function AccountsPage({ user }) {
                 {ROLE_OPTIONS.map(r => (
                   <option key={r.value} value={r.value} style={{ background: '#0f1429', color: '#000000' }}>
                     {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block', marginBottom: 6, textTransform: 'uppercase' }}>Trạng Thái</label>
+              <select
+                className="input-field"
+                value={form.status}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+              >
+                {STATUS_OPTIONS.map(s => (
+                  <option key={s.value} value={s.value} style={{ background: '#0f1429', color: '#000000' }}>
+                    {s.label}
                   </option>
                 ))}
               </select>

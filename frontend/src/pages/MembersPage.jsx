@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search, Users, TrendingUp, Award } from 'lucide-react';
-import { getMembers, createMember, updateMember, deleteMember } from '../services/api';
+import { Plus, Edit, Trash2, Search, Users, TrendingUp, Award, Calendar, X } from 'lucide-react';
+import { getMembers, createMember, updateMember, deleteMember, getAttendance, getSchedules } from '../services/api';
 import Modal from '../components/Modal';
 import Avatar from '../components/Avatar';
 import StatusBadge from '../components/StatusBadge';
@@ -18,8 +18,40 @@ export default function MembersPage({ user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [loading, setLoading] = useState(true);
+  const [attendanceModal, setAttendanceModal] = useState(false);
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [memberAttendance, setMemberAttendance] = useState([]);
 
-  useEffect(() => { loadMembers(); }, []);
+  useEffect(() => { 
+    loadMembers();
+    
+    // Auto-refresh members list every 10 seconds
+    const refreshInterval = setInterval(() => {
+      loadMembers();
+    }, 10000);
+
+    // Listen for storage changes (when data is updated in other components)
+    const handleStorageChange = (e) => {
+      if (e.key === 'mockMembers' || e.key === 'lastMemberUpdate') {
+        loadMembers();
+      }
+    };
+    
+    // Listen for custom event when members are updated
+    const handleMembersUpdated = () => {
+      loadMembers();
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('membersUpdated', handleMembersUpdated);
+
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('membersUpdated', handleMembersUpdated);
+    };
+  }, []);
 
   const loadMembers = async () => {
     try {
@@ -59,6 +91,33 @@ export default function MembersPage({ user }) {
     if (!window.confirm('Xóa học viên này?')) return;
     await deleteMember(id);
     setMembers(members.filter(m => m.id !== id));
+  };
+
+  const viewAttendance = async (member) => {
+    setSelectedMember(member);
+    try {
+      const allAttendance = await getAttendance();
+      const schedules = await getSchedules();
+      
+      // Lấy ID các gói member đã đăng ký (magoi có thể là số hoặc mảng)
+      const memberPackages = Array.isArray(member.magoi) ? member.magoi : [member.magoi];
+      
+      // Lấy ID các lớp (schedule) mà member đã đăng ký (dựa trên gói)
+      const enrolledScheduleIds = schedules
+        .filter(s => memberPackages.includes(s.goi_id))
+        .map(s => s.id);
+      
+      // Lọc điểm danh: chỉ hiển thị những buổi của member và trong các lớp đã đăng ký
+      const memberAtt = allAttendance.filter(
+        a => a.hocvien_id === member.id && enrolledScheduleIds.includes(a.lichid)
+      );
+      
+      setMemberAttendance(memberAtt);
+      setAttendanceModal(true);
+    } catch (error) {
+      console.error('Lỗi tải dữ liệu điểm danh:', error);
+      alert('Không thể tải dữ liệu điểm danh');
+    }
   };
 
   if (loading) return <div style={{ color: '#fff', textAlign: 'center', marginTop: 50 }}>Đang tải dữ liệu...</div>;
@@ -200,8 +259,7 @@ export default function MembersPage({ user }) {
                 </div>
 <StatusBadge status={m.trangthai} />
                 {editable && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button className="btn btn-ghost" onClick={() => openEdit(m)} style={{ padding: '6px 12px', fontSize: 12, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: 4 }}><Edit size={14} /></button>
+                  <div style={{ display: 'flex', gap: 6 }}>                    <button className="btn btn-ghost" onClick={() => viewAttendance(m)} style={{ padding: '6px 12px', fontSize: 12, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: 4 }} title="Xem điểm danh"><Calendar size={14} /></button>                    <button className="btn btn-ghost" onClick={() => openEdit(m)} style={{ padding: '6px 12px', fontSize: 12, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: 4 }}><Edit size={14} /></button>
                     {user.role === 'admin' && (
                       <button className="btn btn-danger" onClick={() => del(m.id)} style={{ padding: '6px 12px', fontSize: 12, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: 4 }}><Trash2 size={14} /></button>
                     )}
@@ -216,6 +274,109 @@ export default function MembersPage({ user }) {
           )}
         </div>
       </div>
+
+{attendanceModal && selectedMember && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setAttendanceModal(false)}>
+          <div style={{ background: 'linear-gradient(135deg, #0f1429 0%, #141414 100%)', borderRadius: '16px', padding: '32px', width: '90%', maxWidth: '600px', border: '1px solid rgba(196, 30, 58, 0.2)', boxShadow: '0 20px 60px rgba(0,0,0,0.8)', maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+              <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', margin: 0 }}>Điểm danh của {selectedMember.hoten}</h2>
+              <button onClick={() => setAttendanceModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 0 }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {memberAttendance.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                {Object.entries(
+                  memberAttendance.reduce((acc, att) => {
+                    const date = att.ngay;
+                    if (!acc[date]) acc[date] = [];
+                    // Kiểm tra xem lớp này đã được thêm vào ngày này chưa
+                    const exists = acc[date].some(a => a.lich_ten === att.lich_ten);
+                    if (!exists) {
+                      acc[date].push(att);
+                    }
+                    return acc;
+                  }, {})
+                ).sort(([dateA], [dateB]) => new Date(dateB) - new Date(dateA)).map(([date, attendances]) => (
+                  <div key={date}>
+                    <div style={{ 
+                      fontSize: 14, 
+                      fontWeight: 700, 
+                      color: '#9ca3af', 
+                      marginBottom: 12, 
+                      paddingBottom: 12, 
+                      borderBottom: '1px solid rgba(255,255,255,0.1)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px'
+                    }}>
+                      📅 {new Date(date).toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {attendances.map((att, idx) => (
+                        <div key={att.id || idx} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '12px',
+                          borderRadius: '10px',
+                          background: 'rgba(255,255,255,0.02)',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          gap: 12,
+                          transition: 'all 0.2s ease'
+                        }} onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                          e.currentTarget.style.borderColor = 'rgba(196,30,58,0.3)';
+                        }} onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.02)';
+                          e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
+                        }}>
+                          <div style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: '8px',
+                            background: att.trangthai === 'có mặt' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: 16,
+                            flexShrink: 0
+                          }}>
+                            {att.trangthai === 'có mặt' ? '✓' : '✗'}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <p style={{ fontWeight: 700, fontSize: 13, color: '#ffffff', margin: 0 }}>{att.lich_ten}</p>
+                            <p style={{ fontSize: 11, color: '#9ca3af', margin: '4px 0 0 0' }}>👨‍🏫 {att.hlv_ten}</p>
+                          </div>
+                          <div style={{
+                            padding: '4px 12px',
+                            borderRadius: '6px',
+                            background: att.trangthai === 'có mặt' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                            color: att.trangthai === 'có mặt' ? '#10b981' : '#ef4444',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            flexShrink: 0
+                          }}>
+                            {att.trangthai === 'có mặt' ? 'Có mặt' : 'Vắng'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '32px', color: '#9ca3af' }}>
+                <Calendar size={40} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
+                <p style={{ margin: 0, fontSize: 14 }}>Chưa có dữ liệu điểm danh</p>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
+              <button className="btn btn-primary" onClick={() => setAttendanceModal(false)}>Đóng</button>
+            </div>
+          </div>
+        </div>
+      )}
 
 {modal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setModal(null)}>

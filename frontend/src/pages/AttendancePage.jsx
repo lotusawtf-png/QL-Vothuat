@@ -37,10 +37,34 @@ export default function AttendancePage({ user }) {
         setLoading(false);
       }
     };
+    
     fetch();
+    
+    // Auto-refresh attendance every 12 seconds
+    const refreshInterval = setInterval(fetch, 12000);
+    
+    // Listen for member updates
+    const handleMembersUpdated = fetch;
+    window.addEventListener('membersUpdated', handleMembersUpdated);
+    
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('membersUpdated', handleMembersUpdated);
+    };
   }, [user.trainerId, isTrainer]);
 
-  const mySchedules = isTrainer ? schedules.filter(s => s.hluyen_id === user.trainerId) : [];
+  const mySchedules = isTrainer ? schedules.filter(s => {
+    // Trainer is the main instructor
+    if (s.hluyen_id === user.trainerId) return true;
+    // OR trainer is registered and approved for this schedule
+    if (s.danh_sach_hlv_dang_ky && Array.isArray(s.danh_sach_hlv_dang_ky)) {
+      return s.danh_sach_hlv_dang_ky.some(h => 
+        h.hlv_id === user.trainerId && h.trang_thai === 'đã duyệt'
+      );
+    }
+    return false;
+  }) : [];
   const filteredAttendance = isAdmin && filterTrainer 
     ? attendance.filter(a => a.hlv_id === parseInt(filterTrainer))
     : attendance;
@@ -111,6 +135,88 @@ export default function AttendancePage({ user }) {
     }
   };
 
+  // Helper functions for trainer attendance counting
+  const getTodayDate = () => new Date().toISOString().split('T')[0];
+  
+  // Get unique members "có mặt" today (only 1 per member)
+  const getTodayPresentMembers = () => {
+    const today = getTodayDate();
+    const todayAttendance = attendance.filter(a => a.ngay === today && a.trangthai === 'có mặt');
+    const uniqueMembers = new Set(todayAttendance.map(a => a.hocvien_id));
+    return uniqueMembers.size;
+  };
+
+  // Get attendance records for today (only present, but show all classes per member)
+  const getTodayAttendanceRecords = () => {
+    const today = getTodayDate();
+    const todayAttendance = attendance.filter(a => a.ngay === today && a.trangthai === 'có mặt');
+    
+    // Keep only first record per member per class (no duplicates within same class)
+    const seen = new Set();
+    return todayAttendance.filter(a => {
+      const key = `${a.hocvien_id}_${a.lichid}`; // unique per member + class
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  // Get absence records for today (only absent, but show all classes per member)
+  // Exclude records if the same member has "có mặt" for the same class today
+  const getTodayAbsenceRecords = () => {
+    const today = getTodayDate();
+    const todayAbsence = attendance.filter(a => a.ngay === today && a.trangthai === 'vắng mặt');
+    
+    // Get all "có mặt" records for today to build a set of (member_id, class_id) pairs
+    const presentSet = new Set();
+    attendance.forEach(a => {
+      if (a.ngay === today && a.trangthai === 'có mặt') {
+        presentSet.add(`${a.hocvien_id}_${a.lichid}`);
+      }
+    });
+    
+    // Keep only first record per member per class (no duplicates within same class)
+    // AND exclude records where member already has "có mặt" for this class
+    const seen = new Set();
+    return todayAbsence.filter(a => {
+      const memberClassKey = `${a.hocvien_id}_${a.lichid}`;
+      
+      // Skip if member already present for this class
+      if (presentSet.has(memberClassKey)) return false;
+      
+      // Skip if already added this member+class combination
+      if (seen.has(memberClassKey)) return false;
+      
+      seen.add(memberClassKey);
+      return true;
+    });
+  };
+
+  // Get unique members "vắng mặt" today (excluding those with "có mặt" for that class)
+  const getTodayAbsentMembers = () => {
+    return getTodayAbsenceRecords().length > 0 
+      ? new Set(getTodayAbsenceRecords().map(a => a.hocvien_id)).size 
+      : 0;
+  };
+
+  // Get actual enrolled members count for a schedule
+  const getActualEnrolledCount = (scheduleId) => {
+    const scheduleAttendance = attendance.filter(a => a.lichid === scheduleId);
+    const uniqueMembers = new Set(scheduleAttendance.map(a => a.hocvien_id));
+    return uniqueMembers.size;
+  };
+
+  // Get total unique attendance sessions (class + date only)
+  // All students in the same class on the same day = 1 session
+  const getTotalUniqueSessions = () => {
+    const seen = new Set();
+    attendance.forEach(a => {
+      const key = `${a.lichid}_${a.ngay}`; // unique per class + date
+      seen.add(key);
+    });
+    return seen.size;
+  };
+
   if (loading) return <div style={{ color: '#fff', textAlign: 'center', marginTop: 50 }}>Đang tải dữ liệu...</div>;
 
   // ===== TRAINER VIEW =====
@@ -140,8 +246,8 @@ export default function AttendancePage({ user }) {
             <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 0% 0%, rgba(76, 175, 80, 0.1), transparent 80%)', opacity: 0.5, pointerEvents: 'none' }} />
             <div style={{ position: 'relative', zIndex: 1 }}>
               <p style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>Có Mặt</p>
-              <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{attendance.filter(a => a.trangthai === 'có mặt').length}</p>
-              <p style={{ fontSize: 12, color: '#9ca3af' }}>Hôm nay: <span style={{ color: '#4caf50', fontWeight: 700 }}>+{attendance.filter(a => a.trangthai === 'có mặt' && a.ngay === new Date().toISOString().split('T')[0]).length}</span></p>
+              <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{getTodayPresentMembers()}</p>
+              <p style={{ fontSize: 12, color: '#9ca3af' }}>Hôm nay: <span style={{ color: '#4caf50', fontWeight: 700 }}>+{getTodayPresentMembers()}</span></p>
             </div>
           </div>
           <div style={{
@@ -155,8 +261,8 @@ export default function AttendancePage({ user }) {
             <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 0% 0%, rgba(239, 83, 80, 0.1), transparent 80%)', opacity: 0.5, pointerEvents: 'none' }} />
             <div style={{ position: 'relative', zIndex: 1 }}>
               <p style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>Vắng Mặt</p>
-              <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{attendance.filter(a => a.trangthai === 'vắng mặt').length}</p>
-              <p style={{ fontSize: 12, color: '#9ca3af' }}>Cần theo dõi: <span style={{ color: '#ef5350', fontWeight: 700 }}>!</span></p>
+              <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{getTodayAbsentMembers()}</p>
+              <p style={{ fontSize: 12, color: '#9ca3af' }}>Hôm nay: <span style={{ color: '#ef5350', fontWeight: 700 }}>+{getTodayAbsentMembers()}</span></p>
             </div>
           </div>
           <div style={{
@@ -170,8 +276,8 @@ export default function AttendancePage({ user }) {
             <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 0% 0%, rgba(79, 195, 247, 0.1), transparent 80%)', opacity: 0.5, pointerEvents: 'none' }} />
             <div style={{ position: 'relative', zIndex: 1 }}>
               <p style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>Tổng Buổi</p>
-              <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{attendance.length}</p>
-              <p style={{ fontSize: 12, color: '#9ca3af' }}>Tháng này: <span style={{ color: '#4fc3f7', fontWeight: 700 }}>+{attendance.length}</span></p>
+              <p style={{ fontSize: 32, fontWeight: 800, color: '#fff', marginBottom: 8 }}>{getTotalUniqueSessions()}</p>
+              <p style={{ fontSize: 12, color: '#9ca3af' }}>Tháng này: <span style={{ color: '#4fc3f7', fontWeight: 700 }}>+{getTotalUniqueSessions()}</span></p>
             </div>
           </div>
         </div>
@@ -205,7 +311,7 @@ export default function AttendancePage({ user }) {
                     {schedule.thu} • {schedule.gio} • {schedule.phongtap}
                   </p>
                   <p style={{ fontSize: 12, color: '#9ca3af', margin: '8px 0' }}>
-                    Sĩ số: <span style={{ color: '#4fc3f7', fontWeight: 600 }}>{schedule.sisohientai}/{schedule.sisotoida}</span>
+                    Sĩ số: <span style={{ color: '#4fc3f7', fontWeight: 600 }}>{getActualEnrolledCount(schedule.id)}/{schedule.sisotoida}</span>
                   </p>
                   <button
                     onClick={() => openQuickAttendance(schedule)}
@@ -250,7 +356,7 @@ export default function AttendancePage({ user }) {
               <div style={{ width: 28, height: 28, borderRadius: '12px', background: 'rgba(76, 175, 80, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <CheckCircle2 size={16} color="#4caf50" />
               </div>
-              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#ffffff', margin: 0 }}>Lịch điểm danh</h2>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#ffffff', margin: 0 }}>Lịch điểm danh hôm nay</h2>
             </div>
             <button className="btn btn-primary" onClick={openAdd} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Plus size={15} /> Thêm
@@ -258,58 +364,125 @@ export default function AttendancePage({ user }) {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {attendance.length > 0 ? (
-              attendance.map(a => (
-                <div key={a.id} style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.05)',
-                  transition: 'all 0.2s ease',
-                }} onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
-                  e.currentTarget.style.borderColor = a.trangthai === 'có mặt' ? 'rgba(76, 175, 80, 0.2)' : 'rgba(239, 83, 80, 0.2)';
-                }} onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
-                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
-                }}>
-                  <Avatar initials={a.hocvien_ten[0]} size={36} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontWeight: 700, fontSize: 14, color: '#ffffff', margin: 0 }}>{a.hocvien_ten}</p>
-                    <p style={{ fontSize: 12, color: '#9ca3af', margin: '2px 0 0 0' }}>{a.lich_ten}</p>
+            {getTodayAttendanceRecords().length > 0 || getTodayAbsenceRecords().length > 0 ? (
+              <>
+                {/* Có mặt section */}
+                {getTodayAttendanceRecords().length > 0 && (
+                  <div>
+                    <h3 style={{ fontSize: 13, fontWeight: 700, color: '#4caf50', marginBottom: 12, margin: '0 0 12px 0' }}>✓ Có Mặt</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {getTodayAttendanceRecords().map(a => (
+                        <div key={a.id} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 12,
+                          padding: '12px',
+                          borderRadius: '12px',
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.05)',
+                          transition: 'all 0.2s ease',
+                        }} onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                          e.currentTarget.style.borderColor = 'rgba(76, 175, 80, 0.2)';
+                        }} onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                          e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
+                        }}>
+                          <Avatar initials={a.hocvien_ten[0]} size={36} />
+                          <div style={{ flex: 1 }}>
+                            <p style={{ fontWeight: 700, fontSize: 14, color: '#ffffff', margin: 0 }}>{a.hocvien_ten}</p>
+                            <p style={{ fontSize: 12, color: '#9ca3af', margin: '2px 0 0 0' }}>{a.lich_ten}</p>
+                          </div>
+                          <div style={{ textAlign: 'right', marginRight: 8 }}>
+                            <p style={{ fontSize: 12, color: '#9ca3af', margin: 0 }}>Ngày: <span style={{ color: '#ffffff', fontWeight: 600 }}>{a.ngay}</span></p>
+                            {a.ghichu && <p style={{ fontSize: 11, color: '#9ca3af', margin: '2px 0 0 0' }}>Ghi chú: {a.ghichu}</p>}
+                          </div>
+                          <StatusBadge status={a.trangthai} />
+                          <button 
+                            onClick={() => handleDelete(a.id)}
+                            style={{
+                              background: 'rgba(239, 83, 80, 0.2)',
+                              border: '1px solid rgba(239, 83, 80, 0.4)',
+                              color: '#ef5350',
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            Xóa
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ textAlign: 'right', marginRight: 8 }}>
-                    <p style={{ fontSize: 12, color: '#9ca3af', margin: 0 }}>Ngày: <span style={{ color: '#ffffff', fontWeight: 600 }}>{a.ngay}</span></p>
-                    {a.ghichu && <p style={{ fontSize: 11, color: '#9ca3af', margin: '2px 0 0 0' }}>Ghi chú: {a.ghichu}</p>}
+                )}
+
+                {/* Vắng mặt section */}
+                {getTodayAbsenceRecords().length > 0 && (
+                  <div>
+                    <h3 style={{ fontSize: 13, fontWeight: 700, color: '#ef5350', marginBottom: 12, margin: '0 0 12px 0' }}>✗ Vắng Mặt</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {getTodayAbsenceRecords().map(a => (
+                        <div key={a.id} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 12,
+                          padding: '12px',
+                          borderRadius: '12px',
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.05)',
+                          transition: 'all 0.2s ease',
+                        }} onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                          e.currentTarget.style.borderColor = 'rgba(239, 83, 80, 0.2)';
+                        }} onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                          e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
+                        }}>
+                          <Avatar initials={a.hocvien_ten[0]} size={36} />
+                          <div style={{ flex: 1 }}>
+                            <p style={{ fontWeight: 700, fontSize: 14, color: '#ffffff', margin: 0 }}>{a.hocvien_ten}</p>
+                            <p style={{ fontSize: 12, color: '#9ca3af', margin: '2px 0 0 0' }}>{a.lich_ten}</p>
+                          </div>
+                          <div style={{ textAlign: 'right', marginRight: 8 }}>
+                            <p style={{ fontSize: 12, color: '#9ca3af', margin: 0 }}>Ngày: <span style={{ color: '#ffffff', fontWeight: 600 }}>{a.ngay}</span></p>
+                            {a.ghichu && <p style={{ fontSize: 11, color: '#9ca3af', margin: '2px 0 0 0' }}>Ghi chú: {a.ghichu}</p>}
+                          </div>
+                          <StatusBadge status={a.trangthai} />
+                          <button 
+                            onClick={() => handleDelete(a.id)}
+                            style={{
+                              background: 'rgba(239, 83, 80, 0.2)',
+                              border: '1px solid rgba(239, 83, 80, 0.4)',
+                              color: '#ef5350',
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            Xóa
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <StatusBadge status={a.trangthai} />
-                  <button 
-                    onClick={() => handleDelete(a.id)}
-                    style={{
-                      background: 'rgba(239, 83, 80, 0.2)',
-                      border: '1px solid rgba(239, 83, 80, 0.4)',
-                      color: '#ef5350',
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4
-                    }}
-                  >
-                    <Trash2 size={14} />
-                    Xóa
-                  </button>
-                </div>
-              ))
+                )}
+              </>
             ) : (
               <div style={{ textAlign: 'center', padding: '32px', color: '#9ca3af' }}>
-                Chưa có bản ghi điểm danh nào
+                Chưa có bản ghi điểm danh nào hôm nay
               </div>
             )}
           </div>
@@ -324,7 +497,22 @@ export default function AttendancePage({ user }) {
               </h2>
               
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 12, maxHeight: '400px', overflowY: 'auto' }}>
-                {members.map(member => (
+                {members
+                  .filter(member => {
+                    // Chỉ hiển thị member đã đăng ký gói của lớp này
+                    const memberPackages = Array.isArray(member.magoi) ? member.magoi : [member.magoi];
+                    if (!memberPackages.includes(selectedSchedule?.goi_id)) return false;
+                    
+                    // Chỉ hiển thị member chưa được điểm danh vào ngày hôm nay cho lớp này
+                    const today = new Date().toISOString().split('T')[0];
+                    const hasAttendanceToday = attendance.some(a =>
+                      a.hocvien_id === member.id &&
+                      a.lichid === selectedSchedule?.id &&
+                      a.ngay === today
+                    );
+                    return !hasAttendanceToday;
+                  })
+                  .map(member => (
                   <div key={member.id} style={{
                     background: 'rgba(255,255,255,0.03)',
                     border: '1px solid rgba(255,255,255,0.1)',

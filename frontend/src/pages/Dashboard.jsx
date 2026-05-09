@@ -43,7 +43,21 @@ export default function Dashboard({ user }) {
         setLoading(false);
       }
     };
+    
     fetchData();
+    
+    // Auto-refresh dashboard every 15 seconds
+    const refreshInterval = setInterval(fetchData, 15000);
+    
+    // Listen for data updates
+    const handleMembersUpdated = fetchData;
+    window.addEventListener('membersUpdated', handleMembersUpdated);
+    
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('membersUpdated', handleMembersUpdated);
+    };
   }, [user.memberId, user.role]);
 
   const totalRevenue = payments.filter(p => p.trangthai === 'đã thanh toán').reduce((s, p) => s + p.sotien, 0);
@@ -56,7 +70,69 @@ export default function Dashboard({ user }) {
   const memberAttendanceCount = attendance.filter(a => a.hocvien_id === user.memberId && a.trangthai === 'có mặt').length;
   const memberPackagesCount = memberData?.magoi?.length || 0;
 
-  // Bảng màu hiện đại
+  // Trainer-specific stats - only from trainer's classes
+  let trainerTodayAttendance = [];
+  let trainerTodayAbsent = [];
+  let trainerTotalAttendance = [];
+
+  if (user.role === 'trainer' && user.trainerId) {
+    trainerTodayAttendance = attendance.filter(a => 
+      parseInt(a.hlv_id) === parseInt(user.trainerId) && 
+      a.trangthai === 'có mặt'
+    );
+    
+    trainerTodayAbsent = attendance.filter(a => 
+      parseInt(a.hlv_id) === parseInt(user.trainerId) && 
+      a.trangthai === 'vắng mặt'
+    );
+    
+    trainerTotalAttendance = attendance.filter(a => 
+      parseInt(a.hlv_id) === parseInt(user.trainerId)
+    );
+  }
+
+  // Lọc lịch học hôm nay và tính sĩ số thực tế từ attendance
+  const getTodaySchedules = () => {
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    const dayNames = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
+    const todayName = dayNames[dayOfWeek];
+    const dayNumber = dayOfWeek === 0 ? 'Chủ nhật' : dayOfWeek; // Convert 0->Sunday, 1-6 to num
+    
+    const result = schedules
+      .filter(s => {
+        // Check if schedule is active
+        if (!s.thu) return false;
+        // Match day of week - handle various formats (e.g., "Thứ 2,4,6", "2,4,6", "2")
+        const thuStr = String(s.thu).toLowerCase();
+        const todayLower = todayName.toLowerCase();
+        const dayStr = String(dayOfWeek);
+        
+        return thuStr.includes(todayLower) || 
+               thuStr.includes(todayLower.replace('thứ ', '')) ||
+               thuStr.includes(dayStr.replace('thứ ', '')) ||
+               (dayOfWeek === 0 && thuStr.includes('0'));
+      })
+      .map(s => ({
+        ...s,
+        // Tính sĩ số thực tế từ attendance hôm nay
+        sisohientai: attendance.filter(a => a.lichoc_id === s.id).length,
+        // Nếu không có attendance, dùng sisohientai từ dữ liệu (hoặc 0)
+        sisohientai_display: attendance.filter(a => a.lichoc_id === s.id).length || (s.sisohientai || 0),
+      }));
+    
+    // Nếu không có lịch hôm nay, hiển thị tất cả lịch (để xem được dữ liệu)
+    if (result.length === 0) {
+      return schedules.map(s => ({
+        ...s,
+        sisohientai_display: attendance.filter(a => a.lichoc_id === s.id).length || (s.sisohientai || 0),
+      }));
+    }
+    
+    return result;
+  };
+
+  const todaySchedules = getTodaySchedules();
   const colorPalette = {
     primary: '#c41e3a',    // đỏ đặc trưng
     secondary: '#ff6b35',  // cam
@@ -82,10 +158,10 @@ export default function Dashboard({ user }) {
       { label: 'Lịch Đang Mở', value: schedules.length, icon: Calendar, color: colorPalette.accent, bg: 'rgba(79,195,247,0.1)' },
     ],
     trainer: [
-      { label: 'Lớp Đang Dạy', value: schedules.filter(s => s.hluyen_id === user.trainerId).length, icon: Calendar, color: colorPalette.primary, bg: 'rgba(196,30,58,0.1)' },
-      { label: 'Học Viên Hôm Nay', value: attendance.filter(a => a.trangthai === 'có mặt').length, icon: Users, color: colorPalette.accent, bg: 'rgba(79,195,247,0.1)' },
-      { label: 'Vắng Mặt Hôm Nay', value: attendance.filter(a => a.trangthai === 'vắng mặt').length, icon: AlertCircle, color: colorPalette.warning, bg: 'rgba(255,167,38,0.1)' },
-      { label: 'Tổng Buổi Điểm Danh', value: attendance.length, icon: ClipboardCheck, color: colorPalette.success, bg: 'rgba(129,199,132,0.1)' },
+      { label: 'Lớp Đang Dạy', value: schedules.filter(s => parseInt(s.hluyen_id) === parseInt(user.trainerId)).length, icon: Calendar, color: colorPalette.primary, bg: 'rgba(196,30,58,0.1)' },
+      { label: 'Học Viên Hôm Nay', value: trainerTodayAttendance.length, icon: Users, color: colorPalette.accent, bg: 'rgba(79,195,247,0.1)' },
+      { label: 'Vắng Mặt Hôm Nay', value: trainerTodayAbsent.length, icon: AlertCircle, color: colorPalette.warning, bg: 'rgba(255,167,38,0.1)' },
+      { label: 'Tổng Buổi Điểm Danh', value: trainerTotalAttendance.length, icon: ClipboardCheck, color: colorPalette.success, bg: 'rgba(129,199,132,0.1)' },
     ],
     member: [
       { label: 'Gói Tập Đã Chọn', value: memberPackagesCount, icon: Award, color: colorPalette.primary, bg: 'rgba(196,30,58,0.1)' },
@@ -211,23 +287,29 @@ export default function Dashboard({ user }) {
               </button>
             </div>
             <div>
-              {schedules.slice(0, 4).map(s => (
-                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 24px', borderBottom: '1px solid rgba(196,30,58,0.08)', transition: 'background 0.2s ease' }} onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(79,195,247,0.08)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-                  <div style={{ width: 48, height: 48, borderRadius: '14px', background: `${colorPalette.accent}20`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Dumbbell size={22} color={colorPalette.accent} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', marginBottom: 4 }}>{s.tenbomon}</p>
-                    <p style={{ fontSize: 12, color: '#9ca3af' }}>{s.gio} · {s.hluyen_ten}</p>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: '#9ca3af' }}>{s.sisohientai}/{s.sisotoida}</span>
-                    <div style={{ width: 50, height: 4, background: 'rgba(196,30,58,0.1)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
-                      <div style={{ width: `${(s.sisohientai / s.sisotoida) * 100}%`, height: '100%', background: `linear-gradient(90deg, ${colorPalette.accent}, ${colorPalette.primary})`, borderRadius: 2, transition: 'width 0.3s ease' }} />
+              {todaySchedules && todaySchedules.length > 0 ? (
+                todaySchedules.map(s => (
+                  <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 24px', borderBottom: '1px solid rgba(196,30,58,0.08)', transition: 'background 0.2s ease' }} onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(79,195,247,0.08)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                    <div style={{ width: 48, height: 48, borderRadius: '14px', background: `${colorPalette.accent}20`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Dumbbell size={22} color={colorPalette.accent} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', marginBottom: 4 }}>{s.tenbomon}</p>
+                      <p style={{ fontSize: 12, color: '#9ca3af' }}>{s.gio} · {s.hluyen_ten} · {s.phongtap || 'Phòng'}</p>
+                    </div>
+                    <div style={{ textAlign: 'right', minWidth: 80 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#9ca3af' }}>{s.sisohientai_display || 0}/{s.sisotoida || '?'}</span>
+                      <div style={{ width: 60, height: 4, background: 'rgba(196,30,58,0.1)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
+                        <div style={{ width: `${s.sisotoida ? ((s.sisohientai_display || 0) / s.sisotoida) * 100 : 0}%`, height: '100%', background: `linear-gradient(90deg, ${colorPalette.accent}, ${colorPalette.primary})`, borderRadius: 2, transition: 'width 0.3s ease' }} />
+                      </div>
                     </div>
                   </div>
+                ))
+              ) : (
+                <div style={{ padding: '32px 24px', textAlign: 'center', color: '#888' }}>
+                  <p style={{ fontSize: 14, margin: 0 }}>Không có lịch học hôm nay</p>
                 </div>
-              ))}
+              )}
             </div>
             <div style={{ padding: '12px 24px', borderTop: '1px solid rgba(196,30,58,0.1)', textAlign: 'center', background: 'rgba(0,0,0,0.1)' }}>
               <button style={{ background: 'none', border: 'none', color: colorPalette.accent, fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={(e) => e.target.style.opacity = '0.7'} onMouseLeave={(e) => e.target.style.opacity = '1'}>Quản lý lịch học →</button>

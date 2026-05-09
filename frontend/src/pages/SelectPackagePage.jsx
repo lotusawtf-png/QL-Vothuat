@@ -13,6 +13,19 @@ export default function SelectPackagePage({ user, onComplete }) {
 
   useEffect(() => {
     loadData();
+    
+    // Auto-refresh package selection every 10 seconds
+    const refreshInterval = setInterval(loadData, 10000);
+    
+    // Listen for member updates
+    const handleMembersUpdated = loadData;
+    window.addEventListener('membersUpdated', handleMembersUpdated);
+    
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('membersUpdated', handleMembersUpdated);
+    };
   }, [user?.memberId]);
 
   const loadData = async () => {

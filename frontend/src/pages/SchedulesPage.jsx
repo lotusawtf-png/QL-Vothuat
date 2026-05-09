@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, Calendar, Users as UsersIcon, Clock, CheckCircle, AlertCircle } from 'lucide-react';
-import { getSchedules, createSchedule, updateSchedule, deleteSchedule, getTrainers, registerSchedule, getMember, getPackages, getPayments, getSessionsRemaining, enrollMemberInClass, isMemberEnrolledInClass, getClassEnrollments } from '../services/api';
+import { getSchedules, createSchedule, updateSchedule, deleteSchedule, getTrainers, registerSchedule, cancelScheduleRegistration, getMember, getPackages, getPayments, getSessionsRemaining, enrollMemberInClass, isMemberEnrolledInClass, getClassEnrollments, getAttendance } from '../services/api';
 import Modal from '../components/Modal';
 import Avatar from '../components/Avatar';
 import StatusBadge from '../components/StatusBadge';
@@ -20,13 +20,23 @@ export default function SchedulesPage({ user }) {
   const [enrolledClasses, setEnrolledClasses] = useState(new Set()); // Track enrolled schedule IDs
   const [enrolling, setEnrolling] = useState(false); // Loading state for enrollment button
   const [classEnrollmentCounts, setClassEnrollmentCounts] = useState({}); // Track real enrollment count per class
+  const [attendanceTodayBySchedule, setAttendanceTodayBySchedule] = useState({}); // Track attendance count today per schedule
 
   useEffect(() => {
     const fetch = async () => {
-      const [sched, t, pkgs] = await Promise.all([getSchedules(), getTrainers(), getPackages()]);
+      const [sched, t, pkgs, att] = await Promise.all([getSchedules(), getTrainers(), getPackages(), getAttendance()]);
       setSchedules(sched);
       setTrainers(t);
       setPackages(pkgs);
+      
+      // Calculate attendance count for today
+      const today = new Date().toISOString().split('T')[0];
+      const attendanceToday = {};
+      for (const s of sched) {
+        const countToday = att.filter(a => a.lichid === s.id && a.ngay === today && a.trangthai === 'có mặt').length;
+        attendanceToday[s.id] = countToday;
+      }
+      setAttendanceTodayBySchedule(attendanceToday);
       
       // Load enrollment counts for all schedules
       const enrollmentCounts = {};
@@ -95,7 +105,24 @@ export default function SchedulesPage({ user }) {
       }
       setLoading(false);
     };
+    
     fetch();
+    
+    // Auto-refresh schedules every 12 seconds
+    const refreshInterval = setInterval(fetch, 12000);
+    
+    // Listen for member/payment updates
+    const handleMembersUpdated = fetch;
+    const handlePaymentsUpdated = fetch;
+    window.addEventListener('membersUpdated', handleMembersUpdated);
+    window.addEventListener('paymentsUpdated', handlePaymentsUpdated);
+    
+    // Cleanup
+    return () => {
+      clearInterval(refreshInterval);
+      window.removeEventListener('membersUpdated', handleMembersUpdated);
+      window.removeEventListener('paymentsUpdated', handlePaymentsUpdated);
+    };
   }, [user]);
 
   // Filter schedules: members see only schedules belonging to packages they have paid for
@@ -106,6 +133,7 @@ export default function SchedulesPage({ user }) {
     mySchedules = schedules.filter(s => validPaidPackageIds.includes(parseInt(s.goi_id)));
   }
   
+  // Filter by search term (no day filter - show all schedules)
   const filtered = mySchedules.filter(s => String(s.tenbomon || '').toLowerCase().includes(String(search || '').toLowerCase()));
 
   const handleRegister = async (scheduleId) => {
@@ -116,6 +144,19 @@ export default function SchedulesPage({ user }) {
       setSchedules(updated);
     } catch (error) {
       alert('Lỗi: ' + error.message);
+    }
+  };
+
+  const handleCancelRegister = async (scheduleId) => {
+    if (window.confirm('Bạn chắc chắn muốn hủy đăng ký lớp học này?')) {
+      try {
+        await cancelScheduleRegistration(scheduleId, user.trainerId);
+        alert('Hủy đăng ký thành công!');
+        const updated = await getSchedules();
+        setSchedules(updated);
+      } catch (error) {
+        alert('Lỗi: ' + error.message);
+      }
     }
   };
 
@@ -223,8 +264,10 @@ export default function SchedulesPage({ user }) {
         const newSched = await createSchedule(payload);
         setSchedules([...schedules, newSched]);
       } else {
-        const updated = await updateSchedule(form.id, payload);
-        setSchedules(schedules.map(s => s.id === updated.id ? updated : s));
+        await updateSchedule(form.id, payload);
+        // Reload all schedules to get fresh data from API
+        const updatedSchedules = await getSchedules();
+        setSchedules(updatedSchedules);
       }
       setModal(null);
     } catch (error) { alert('Lỗi: ' + error.message); }
@@ -377,7 +420,7 @@ export default function SchedulesPage({ user }) {
                   <p style={{ fontSize: 12, color: '#9ca3af', margin: '2px 0 0 0' }}>{s.hluyen_ten} • {s.thu} • {s.gio}</p>
                 </div>
                 <div style={{ textAlign: 'right', marginRight: 8, fontSize: 12 }}>
-                  <p style={{ color: '#9ca3af', margin: 0 }}>Sĩ số: <span style={{ color: '#4fc3f7', fontWeight: 700 }}>{classEnrollmentCounts[s.id] || 0}/{s.sisotoida}</span></p>
+                  <p style={{ color: '#9ca3af', margin: 0 }}>Sĩ số: <span style={{ color: '#4fc3f7', fontWeight: 700 }}>{attendanceTodayBySchedule[s.id] || 0}/{s.sisotoida}</span></p>
                   {user.role === 'member' && memberSessions[s.goi_id] && (
                     <p style={{ color: '#9ca3af', margin: '4px 0 0 0', fontSize: 11 }}>📊 Buổi còn lại: <span style={{ color: '#81c784', fontWeight: 700 }}>{memberSessions[s.goi_id].sessionsRemaining}</span></p>
                   )}
@@ -385,8 +428,15 @@ export default function SchedulesPage({ user }) {
                 <StatusBadge status={s.trangthai} />
                 {user.role === 'trainer' && (
                   <button
-                    onClick={() => handleRegister(s.id)}
-                    disabled={isTrainerRegistered(s)}
+                    onClick={() => {
+                      const status = getTrainerRegistrationStatus(s);
+                      if (status === 'chờ duyệt') {
+                        handleCancelRegister(s.id);
+                      } else {
+                        handleRegister(s.id);
+                      }
+                    }}
+                    disabled={getTrainerRegistrationStatus(s) === 'đã duyệt'}
                     style={{
                       padding: '6px 12px',
                       fontSize: 12,
@@ -394,29 +444,61 @@ export default function SchedulesPage({ user }) {
                       display: 'flex',
                       alignItems: 'center',
                       gap: 4,
-                      background: isTrainerRegistered(s) ? 'rgba(129, 199, 132, 0.2)' : 'rgba(79, 195, 247, 0.2)',
-                      border: isTrainerRegistered(s) ? '1px solid rgba(129, 199, 132, 0.4)' : '1px solid rgba(79, 195, 247, 0.4)',
-                      color: isTrainerRegistered(s) ? '#81c784' : '#4fc3f7',
-                      cursor: isTrainerRegistered(s) ? 'default' : 'pointer',
+                      background: (() => {
+                        const status = getTrainerRegistrationStatus(s);
+                        if (status === 'đã duyệt') return 'rgba(129, 199, 132, 0.2)';
+                        if (status === 'chờ duyệt') return 'rgba(255, 152, 0, 0.2)';
+                        return 'rgba(79, 195, 247, 0.2)';
+                      })(),
+                      border: (() => {
+                        const status = getTrainerRegistrationStatus(s);
+                        if (status === 'đã duyệt') return '1px solid rgba(129, 199, 132, 0.4)';
+                        if (status === 'chờ duyệt') return '1px solid rgba(255, 152, 0, 0.4)';
+                        return '1px solid rgba(79, 195, 247, 0.4)';
+                      })(),
+                      color: (() => {
+                        const status = getTrainerRegistrationStatus(s);
+                        if (status === 'đã duyệt') return '#81c784';
+                        if (status === 'chờ duyệt') return '#ff9800';
+                        return '#4fc3f7';
+                      })(),
+                      cursor: getTrainerRegistrationStatus(s) === 'đã duyệt' ? 'default' : 'pointer',
                       fontWeight: 600,
-                      opacity: isTrainerRegistered(s) ? 0.7 : 1,
+                      opacity: getTrainerRegistrationStatus(s) === 'đã duyệt' ? 0.7 : 1,
                       transition: 'all 0.2s',
                     }}
                     onMouseEnter={(e) => {
-                      if (!isTrainerRegistered(s)) {
-                        e.currentTarget.style.background = 'rgba(79, 195, 247, 0.3)';
-                        e.currentTarget.style.borderColor = 'rgba(79, 195, 247, 0.6)';
+                      const status = getTrainerRegistrationStatus(s);
+                      if (status !== 'đã duyệt') {
+                        if (status === 'chờ duyệt') {
+                          e.currentTarget.style.background = 'rgba(255, 152, 0, 0.3)';
+                          e.currentTarget.style.borderColor = 'rgba(255, 152, 0, 0.6)';
+                        } else {
+                          e.currentTarget.style.background = 'rgba(79, 195, 247, 0.3)';
+                          e.currentTarget.style.borderColor = 'rgba(79, 195, 247, 0.6)';
+                        }
                       }
                     }}
                     onMouseLeave={(e) => {
-                      if (!isTrainerRegistered(s)) {
-                        e.currentTarget.style.background = 'rgba(79, 195, 247, 0.2)';
-                        e.currentTarget.style.borderColor = 'rgba(79, 195, 247, 0.4)';
+                      const status = getTrainerRegistrationStatus(s);
+                      if (status !== 'đã duyệt') {
+                        if (status === 'chờ duyệt') {
+                          e.currentTarget.style.background = 'rgba(255, 152, 0, 0.2)';
+                          e.currentTarget.style.borderColor = 'rgba(255, 152, 0, 0.4)';
+                        } else {
+                          e.currentTarget.style.background = 'rgba(79, 195, 247, 0.2)';
+                          e.currentTarget.style.borderColor = 'rgba(79, 195, 247, 0.4)';
+                        }
                       }
                     }}
                   >
                     <CheckCircle size={14} />
-                    {isTrainerRegistered(s) ? 'Đã đăng ký' : 'Đăng ký'}
+                    {(() => {
+                      const status = getTrainerRegistrationStatus(s);
+                      if (status === 'đã duyệt') return 'Đã đăng ký';
+                      if (status === 'chờ duyệt') return 'Hủy đăng ký';
+                      return 'Đăng ký';
+                    })()}
                   </button>
                 )}
                 {user.role === 'member' && (
